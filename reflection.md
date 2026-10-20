@@ -49,9 +49,11 @@ Yes. A few changes made the scheduler workable:
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
 
-`Scheduler.detect_conflicts()` only flags tasks whose due date and time match exactly. It does not check whether durations overlap, so a 30-minute walk at 09:00 and a 10-minute task at 09:15 are not reported even though they collide. I kept it this way because a lightweight check can be one pass over the tasks that groups them by (date, time) and returns warning strings, and it is easy to read and test. A pet owner mostly needs to hear "you put two things at 9:00", and an overlap check would need start/end times for every task, plus a rule for back-to-back tasks. The cost is missed partial overlaps, which would be the next thing to add.
+My `Scheduler.detect_conflicts()` only flags tasks that have the exact same date and time. It does not check whether the durations overlap, so a 30-minute walk at 09:00 and a 10-minute task at 09:15 are not reported even though they run into each other.
 
-I also reviewed `detect_conflicts()` for simplification. A shorter version is possible by sorting the tasks and using `itertools.groupby`, but it hides the "group by time" idea behind an import and an easy-to-forget sort. I kept the `defaultdict` version because a reader can see the grouping directly. Similarly, `sort_by_time()` compares the "HH:MM" strings with a lambda key instead of parsing them. This is only correct because `Task` stores `dueTime` zero-padded, so that normalization is part of the design.
+I kept it this way because I wanted a lightweight check. It makes one pass over the tasks, groups them by date and time, and returns warning messages, which is easy to read and easy to test. For a pet owner, the most useful warning is "you put two things at 9:00". Checking overlaps would need a start and end time for every task and a rule for tasks that are back to back. The downside is that partial overlaps get missed, so that would be the next thing I add.
+
+I also looked at whether `detect_conflicts()` could be simpler. It could be shorter with `itertools.groupby`, but then the grouping hides behind an import and a sort I could easily forget. I kept the `defaultdict` version because I can see the grouping right there. `sort_by_time()` works the same way: it compares the "HH:MM" strings with a lambda instead of parsing them. That only works because `Task` stores `dueTime` zero-padded, so that cleanup is part of the design.
 
 ---
 
@@ -83,7 +85,7 @@ I asked AI to break the code itself, think of edge cases, when it corrected the 
 - **Changed:** the AI's plan for tasks that would run past midnight was to skip them and give a clearer reason. I wanted it blocked and warned about when the value is entered, so `Owner` and `addTask` now reject those values with a message saying what to change. The scheduler's skip stays only as a fallback.
 - **Caught:** when I asked for a test of `mark_complete()`, the method didn't exist. The AI added it rather than writing a test for something that wasn't there.
 
-**How I verified it:** I didn't trust the explanations alone. I ran the edge-case script before and after each fix and compared the outputs, ran `main.py` and pasted its real output into the README, and ran the tests with pytest, which pass (3 passed). Two limits remain. Validation only runs when objects are created or tasks are added, so later direct changes to fields like `owner.timePreferences` aren't re-checked. And `app.py` doesn't use these classes yet, so the Streamlit interface isn't tested.
+**How I verified it:** I didn't trust the explanations alone. I ran the edge-case script before and after each fix and compared the outputs, ran `main.py` and pasted its real output into the README, and ran the tests with pytest, which now pass (39 passed). Two limits remain. Validation only runs when objects are created or tasks are added, so later direct changes to fields like `owner.timePreferences` aren't re-checked. And the Streamlit interface in `app.py` has no automatic tests, so I only checked that it parses.
 
 ---
 
@@ -94,15 +96,15 @@ I asked AI to break the code itself, think of edge cases, when it corrected the 
 - What behaviors did you test?
 - Why were these tests important?
 
-I picked five core behaviors in `pawpal_system.py` and tested each with a normal case and an edge case:
+I picked five core behaviors in `pawpal_system.py` and tested each one with a normal case and an edge case:
 
-1. **Planning by priority within the time budget** (`generatePlan`): high priority first, nothing exceeds the owner's available minutes, and tasks that don't fit are skipped with a reason. Edge cases: 0 available minutes, an afternoon start time, and replanning after a task is completed (old start times are cleared).
-2. **Sorting by time** (`sort_by_time`, plus the due-time and same-pet tie-breaks): "HH:MM" order, untimed tasks last, earlier dates before later ones. Edge cases: unpadded input like "7:30", an empty task list, and due time never beating priority.
-3. **Filtering** (`filter_tasks`): by pet, by status, or both. Edge cases: a pet with no tasks, an unknown pet name, different capitalization, and two pets with the same name.
-4. **Recurring tasks** (`mark_task_complete`, `nextOccurrence`): daily adds 1 day and weekly adds 7. Edge cases: year end, leap day, an overdue task, a task finished early, completing twice (no duplicate), a task that doesn't belong to the owner, and a date past the maximum (the task stays pending).
-5. **Conflict detection** (`detect_conflicts`): a warning when two pending tasks share the same date and time, for one pet or two. Edge cases: three tasks at one time (one warning), untimed tasks never conflict, completed tasks and different dates are ignored.
+1. Planning by priority within the time budget (`generatePlan`): high priority goes first, nothing goes over the owner's available minutes, and tasks that don't fit are skipped with a reason. Edge cases: 0 available minutes, an afternoon start time, and replanning after a task is completed (old start times get cleared).
+2. Sorting by time (`sort_by_time`, plus the due-time and same-pet tie-breaks): "HH:MM" order, untimed tasks last, earlier dates before later ones. Edge cases: unpadded input like "7:30", an empty task list, and due time never beating priority.
+3. Filtering (`filter_tasks`): by pet, by status, or both. Edge cases: a pet with no tasks, an unknown pet name, different capitalization, and two pets with the same name.
+4. Recurring tasks (`mark_task_complete`, `nextOccurrence`): daily adds 1 day and weekly adds 7. Edge cases: year end, leap day, an overdue task, a task finished early, completing twice (no duplicate), a task that doesn't belong to the owner, and a date past the maximum (the task stays pending).
+5. Conflict detection (`detect_conflicts`): a warning when two pending tasks share the same date and time, for one pet or two. Edge cases: three tasks at one time give one warning, untimed tasks never conflict, and completed tasks and different dates are ignored.
 
-These matter because the scheduler's output is what the owner trusts. A wrong order or a double-booked slot is a silent failure, so I wanted tests that would catch it. Empty inputs (an owner with no pets, a pet with no tasks) are included because those are the first things a new user will hit.
+These matter because the owner trusts whatever plan the scheduler shows. A wrong order or a double-booked time fails quietly, so I wanted tests that would catch it. I also tested empty inputs (an owner with no pets, a pet with no tasks) because a new user will hit those first.
 
 **b. Confidence**
 

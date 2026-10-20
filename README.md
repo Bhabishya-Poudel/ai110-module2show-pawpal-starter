@@ -59,23 +59,23 @@ Skipped:
 
 ## 🧪 Testing PawPal+
 
-Activate the virtual environment, then run the tests from the project folder:
+To run the tests, I activate the virtual environment and run pytest from the project folder:
 
 ```bash
 source .venv/bin/activate
 python -m pytest
 ```
 
-The 39 tests in `tests/test_pawpal.py` cover:
+My 39 tests are in `tests/test_pawpal.py`. They check these things:
 
-- **Planning:** tasks are chosen by priority, the plan never exceeds the owner's available minutes, start times are right, skipped tasks get a reason, and replanning clears old start times.
-- **Sorting:** tasks come out in chronological "HH:MM" order, untimed tasks go last, and due time breaks ties but never beats priority. Equal-priority tasks stay grouped by pet.
-- **Filtering:** by pet name and/or completion status, including an unknown pet, a pet with no tasks, different capitalization, and two pets with the same name.
-- **Recurring tasks:** completing a daily task creates one for the next day and a weekly task +7 days. Edge cases: year end, leap day, an overdue task, a task finished early, completing twice (no duplicate), and a task that isn't the owner's.
-- **Conflict detection:** a warning when two or more pending tasks share the same date and time (same pet or different pets). Untimed, completed, and different-date tasks are ignored.
-- **Validation:** bad priority, duration, due time, due date, and frequency values are rejected, and the same task can't be given to two pets.
+- Planning: tasks are picked by priority, the plan never goes over the owner's available minutes, start times are correct, skipped tasks get a reason, and replanning clears the old start times.
+- Sorting: tasks come back in "HH:MM" order with untimed tasks last. Due time only breaks ties and never beats priority, and equal-priority tasks stay grouped by pet.
+- Filtering: by pet name and/or completion status. This includes an unknown pet, a pet with no tasks, different capitalization, and two pets with the same name.
+- Recurring tasks: finishing a daily task makes a new one for the next day, and a weekly task adds 7 days. I also tested year end, leap day, an overdue task, a task finished early, finishing twice (no duplicate), and a task that isn't the owner's.
+- Conflict detection: a warning when two or more pending tasks have the same date and time, for one pet or different pets. Untimed, completed, and different-date tasks are ignored.
+- Validation: bad priority, duration, due time, due date, and frequency values are rejected, and one task can't be given to two pets.
 
-Output of a successful run:
+Output from a successful run:
 
 ```
 ============================= test session starts ==============================
@@ -89,7 +89,7 @@ tests/test_pawpal.py .......................................             [100%]
 ============================== 39 passed in 0.02s ==============================
 ```
 
-**Confidence level: ★★★★☆ (4 out of 5).** All 39 tests pass, and they cover both normal use and unusual input (empty owners, overdue and leap-day dates, duplicate times). I'm not giving 5 because: conflict detection only matches identical times and misses partial overlaps (such as a 30-minute task at 09:00 and another at 09:15), the Streamlit interface (`app.py`) has not been tested automatically, and the checks only run when objects are created, so changing a field directly afterwards isn't re-checked.
+Confidence level: 4 out of 5 stars (★★★★☆). All 39 tests pass and they cover normal use and unusual input like empty owners, overdue dates, leap days, and duplicate times. I didn't give it 5 stars for three reasons. Conflict detection only matches identical times, so it misses a 30-minute task at 09:00 and another at 09:15. The Streamlit app (`app.py`) has no automatic tests. And the checks only run when objects are created, so changing a field directly afterwards isn't checked.
 
 ## 📐 Smarter Scheduling
 
@@ -101,15 +101,15 @@ tests/test_pawpal.py .......................................             [100%]
 | Conflict handling | `Scheduler.detect_conflicts()` | Warns when 2+ pending tasks share the same date and time |
 | Recurring tasks | `Scheduler.mark_task_complete()`, `Task.nextOccurrence()` | `daily` = +1 day, `weekly` = +7 days |
 
-**Sorting.** `Scheduler.sort_by_time()` uses `sorted()` with a lambda key. `Task` stores `dueTime` as zero-padded "HH:MM" (so "7:30" becomes "07:30"), which means comparing the strings is the same as comparing the times.
+Sorting: `Scheduler.sort_by_time()` uses `sorted()` with a lambda as the key. I store `dueTime` as zero-padded "HH:MM" (so "7:30" becomes "07:30"), which means comparing the strings gives the same order as comparing the times.
 
-**Filtering.** `Scheduler.filter_tasks(pet_name=None, completed=None)` narrows the owner's tasks by pet (case-insensitive) and/or by completion status. A filter left as `None` is ignored. The Streamlit task table uses the same filters.
+Filtering: `Scheduler.filter_tasks(pet_name=None, completed=None)` narrows the owner's tasks by pet (not case sensitive) and/or by completion status. If a filter is left as `None` it is ignored. The task table in the Streamlit app uses the same filters.
 
-**Conflict detection.** `Scheduler.detect_conflicts()` groups pending tasks by (date, time) and returns a list of warning strings, one per clash, for the same pet or different pets. It returns messages instead of raising, so the app keeps running. It only matches identical times and does not check overlapping durations (see `reflection.md`, section 2b).
+Conflict detection: `Scheduler.detect_conflicts()` groups the pending tasks by date and time and returns a list of warning messages, one for each clash. It works for the same pet or different pets. It returns messages instead of raising an error, so the program keeps running. It only matches identical times and doesn't check overlapping durations (see section 2b in `reflection.md`).
 
-**Recurring tasks.** A `Task` can have `frequency="daily"` or `"weekly"`. Completing it with `Scheduler.mark_task_complete(task)` marks it done and adds a new copy to the same pet, with the due date moved forward using `datetime.timedelta` (today's date is used if the task has no `dueDate`). If the task is overdue, the next copy is counted from today instead of from the old date. Completing a task twice does not create a second copy. Calling `Task.mark_complete()` directly only flips the flag and does not create the next copy; use `mark_task_complete()` for that. `generatePlan()` leaves out tasks due after today, so tomorrow's copy doesn't appear in today's plan.
+Recurring tasks: a `Task` can have `frequency="daily"` or `"weekly"`. When I finish one with `Scheduler.mark_task_complete(task)`, it marks the task done and adds a new copy to the same pet, with the due date moved forward using `datetime.timedelta`. If the task has no `dueDate`, today's date is used. If the task is overdue, the next copy counts from today instead of the old date. Finishing the same task twice doesn't make a second copy. Calling `Task.mark_complete()` directly only flips the flag and doesn't make the next copy, so `mark_task_complete()` is the one to use. `generatePlan()` leaves out tasks due after today, so tomorrow's copy doesn't show up in today's plan.
 
-Run `python3 main.py` to see sorting, filtering, recurrence and a conflict warning in the terminal.
+Run `python3 main.py` to see sorting, filtering, recurrence, and a conflict warning in the terminal.
 
 ## 📸 Demo Walkthrough
 
