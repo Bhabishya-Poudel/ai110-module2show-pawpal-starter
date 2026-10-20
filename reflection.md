@@ -49,6 +49,10 @@ Yes. A few changes made the scheduler workable:
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
 
+`Scheduler.detect_conflicts()` only flags tasks whose due date and time match exactly. It does not check whether durations overlap, so a 30-minute walk at 09:00 and a 10-minute task at 09:15 are not reported even though they collide. I kept it this way because a lightweight check can be one pass over the tasks that groups them by (date, time) and returns warning strings, and it is easy to read and test. A pet owner mostly needs to hear "you put two things at 9:00", and an overlap check would need start/end times for every task, plus a rule for back-to-back tasks. The cost is missed partial overlaps, which would be the next thing to add.
+
+I also reviewed `detect_conflicts()` for simplification. A shorter version is possible by sorting the tasks and using `itertools.groupby`, but it hides the "group by time" idea behind an import and an easy-to-forget sort. I kept the `defaultdict` version because a reader can see the grouping directly. Similarly, `sort_by_time()` compares the "HH:MM" strings with a lambda key instead of parsing them. This is only correct because `Task` stores `dueTime` zero-padded, so that normalization is part of the design.
+
 ---
 
 ## 3. AI Collaboration
