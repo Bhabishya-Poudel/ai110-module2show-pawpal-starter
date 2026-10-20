@@ -25,10 +25,15 @@ classDiagram
         +int duration
         +String priority
         +boolean completed
+        +String petName
+        +String startTime
+        +String reason
     }
 
     class Scheduler {
         +Owner owner
+        +list~Task~ plan
+        +list~Task~ skipped
         +generatePlan() list~Task~
         +explainPlan() String
     }
@@ -36,3 +41,4 @@ classDiagram
     Owner "1" --> "*" Pet : has
     Pet "1" --> "*" Task : has
     Scheduler --> Owner : uses
+    Scheduler "1" --> "*" Task : plans
