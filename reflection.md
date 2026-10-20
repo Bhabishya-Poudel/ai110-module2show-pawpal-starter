@@ -94,6 +94,16 @@ I asked AI to break the code itself, think of edge cases, when it corrected the 
 - What behaviors did you test?
 - Why were these tests important?
 
+I picked five core behaviors in `pawpal_system.py` and tested each with a normal case and an edge case:
+
+1. **Planning by priority within the time budget** (`generatePlan`): high priority first, nothing exceeds the owner's available minutes, and tasks that don't fit are skipped with a reason. Edge cases: 0 available minutes, an afternoon start time, and replanning after a task is completed (old start times are cleared).
+2. **Sorting by time** (`sort_by_time`, plus the due-time and same-pet tie-breaks): "HH:MM" order, untimed tasks last, earlier dates before later ones. Edge cases: unpadded input like "7:30", an empty task list, and due time never beating priority.
+3. **Filtering** (`filter_tasks`): by pet, by status, or both. Edge cases: a pet with no tasks, an unknown pet name, different capitalization, and two pets with the same name.
+4. **Recurring tasks** (`mark_task_complete`, `nextOccurrence`): daily adds 1 day and weekly adds 7. Edge cases: year end, leap day, an overdue task, a task finished early, completing twice (no duplicate), a task that doesn't belong to the owner, and a date past the maximum (the task stays pending).
+5. **Conflict detection** (`detect_conflicts`): a warning when two pending tasks share the same date and time, for one pet or two. Edge cases: three tasks at one time (one warning), untimed tasks never conflict, completed tasks and different dates are ignored.
+
+These matter because the scheduler's output is what the owner trusts. A wrong order or a double-booked slot is a silent failure, so I wanted tests that would catch it. Empty inputs (an owner with no pets, a pet with no tasks) are included because those are the first things a new user will hit.
+
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?

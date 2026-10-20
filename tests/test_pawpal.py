@@ -160,14 +160,23 @@ def test_filter_tasks_by_pet_and_status():
 
 def test_completing_daily_task_creates_task_for_tomorrow():
     owner, rex = _owner_with_pet()
-    meds = Task("Meds", 5, "high", frequency="daily", dueDate=date(2026, 12, 31))
+    meds = Task("Meds", 5, "high", frequency="daily")  # no dueDate means "today"
     owner.addTask(rex, meds)
 
     new = Scheduler(owner).mark_task_complete(meds)
 
     assert meds.completed is True
-    assert new.dueDate == date(2027, 1, 1)  # crosses a year boundary
+    assert new.dueDate == date.today() + timedelta(days=1)
     assert new.completed is False and new in rex.tasks and new.petName == "Rex"
+
+
+def test_daily_task_crosses_a_year_boundary():
+    # A far-future date, so it is never "overdue" no matter when the test runs.
+    owner, rex = _owner_with_pet()
+    meds = Task("Meds", 5, "high", frequency="daily", dueDate=date(2099, 12, 31))
+    owner.addTask(rex, meds)
+
+    assert Scheduler(owner).mark_task_complete(meds).dueDate == date(2100, 1, 1)
 
 
 def test_completing_weekly_task_adds_seven_days_and_defaults_to_today():
@@ -290,9 +299,9 @@ def test_recurring_task_finished_early_keeps_its_slot():
 
 def test_leap_day_and_chained_completions():
     owner, rex = _owner_with_pet()
-    task = Task("a", 5, "low", frequency="daily", dueDate=date(2028, 2, 28))
+    task = Task("a", 5, "low", frequency="daily", dueDate=date(2096, 2, 28))  # 2096 is a leap year
     owner.addTask(rex, task)
-    assert Scheduler(owner).mark_task_complete(task).dueDate == date(2028, 2, 29)
+    assert Scheduler(owner).mark_task_complete(task).dueDate == date(2096, 2, 29)
 
     chain = Task("b", 5, "low", frequency="daily")
     owner.addTask(rex, chain)
@@ -402,3 +411,95 @@ def test_explain_plan_when_only_future_tasks_exist():
     scheduler.generatePlan()
 
     assert "Nothing to schedule" in scheduler.explainPlan()
+
+
+# --- core planning behaviors: happy paths and empty cases ----------------
+
+
+def test_plan_fills_available_minutes_by_priority_and_sets_start_times():
+    owner = Owner("Sam", 60, "morning")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    owner.addTask(rex, Task("Brush", 15, "low"))
+    owner.addTask(rex, Task("Walk", 30, "high"))
+    owner.addTask(rex, Task("Play", 20, "medium"))
+    scheduler = Scheduler(owner)
+
+    scheduler.generatePlan()
+
+    assert _names(scheduler.plan) == ["Walk", "Play"]
+    assert [t.startTime for t in scheduler.plan] == ["08:00", "08:30"]
+    assert _names(scheduler.skipped) == ["Brush"]
+    assert "only 10 min left" in scheduler.skipped[0].reason
+
+
+def test_plan_never_exceeds_available_minutes():
+    owner = Owner("Sam", 45, "afternoon")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    for i, (mins, prio) in enumerate([(30, "high"), (20, "high"), (10, "medium"), (5, "low")]):
+        owner.addTask(rex, Task(f"t{i}", mins, prio))
+    scheduler = Scheduler(owner)
+
+    scheduler.generatePlan()
+
+    assert sum(t.duration for t in scheduler.plan) <= 45
+    assert scheduler.plan[0].startTime == "13:00"
+
+
+def test_pet_with_no_tasks_and_owner_with_no_pets():
+    owner = Owner("Sam", 60, "morning")
+    scheduler = Scheduler(owner)
+    assert owner.getAllTasks() == []
+    assert scheduler.explainPlan().startswith("No plan yet")
+
+    scheduler.generatePlan()
+    assert scheduler.plan == [] and scheduler.skipped == []
+    assert "Nothing to schedule" in scheduler.explainPlan()
+
+    owner.addPet(Pet("Rex", "dog", "Labrador", 3))  # pet exists but has no tasks
+    scheduler.generatePlan()
+    assert scheduler.plan == []
+    assert scheduler.filter_tasks(pet_name="Rex") == []
+    assert scheduler.detect_conflicts() == []
+
+
+def test_zero_available_minutes_skips_everything():
+    owner = Owner("Sam", 0, "morning")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    owner.addTask(rex, Task("Walk", 10, "high"))
+    scheduler = Scheduler(owner)
+
+    scheduler.generatePlan()
+
+    assert scheduler.plan == [] and _names(scheduler.skipped) == ["Walk"]
+
+
+def test_completed_tasks_are_left_out_and_replanning_clears_old_times():
+    owner = Owner("Sam", 60, "morning")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    walk = Task("Walk", 30, "high")
+    play = Task("Play", 20, "medium")
+    owner.addTask(rex, walk)
+    owner.addTask(rex, play)
+    scheduler = Scheduler(owner)
+    scheduler.generatePlan()
+    assert walk.startTime == "08:00"
+
+    walk.mark_complete()
+    scheduler.generatePlan()
+
+    assert _names(scheduler.plan) == ["Play"]
+    assert walk.startTime == "" and play.startTime == "08:00"
+
+
+def test_same_task_object_cannot_be_given_to_two_pets():
+    owner = Owner("Sam", 60, "morning")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    kit = Pet("Kit", "cat", "Tabby", 2)
+    shared = Task("Walk", 10, "high")
+    owner.addTask(rex, shared)
+
+    try:
+        owner.addTask(kit, shared)
+    except ValueError:
+        return
+    raise AssertionError("the same task should not be assignable to two pets")
