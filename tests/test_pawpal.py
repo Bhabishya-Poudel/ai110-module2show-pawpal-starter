@@ -503,3 +503,196 @@ def test_same_task_object_cannot_be_given_to_two_pets():
     except ValueError:
         return
     raise AssertionError("the same task should not be assignable to two pets")
+
+
+# --- next available slot --------------------------------------------------
+
+
+def _slot_owner(*timed):
+    """An owner with one pet and timed tasks given as (title, minutes, "HH:MM")."""
+    owner, rex = _owner_with_pet()
+    for title, mins, at in timed:
+        owner.addTask(rex, Task(title, mins, "low", dueTime=at))
+    return owner, rex, Scheduler(owner)
+
+
+def test_next_slot_is_the_start_of_the_day_when_nothing_is_booked():
+    _, _, scheduler = _slot_owner()
+    assert scheduler.find_next_available_slot(30) == "08:00"  # morning start
+
+
+def test_next_slot_skips_busy_blocks_and_merges_overlaps():
+    _, _, scheduler = _slot_owner(("a", 30, "08:00"), ("b", 60, "08:30"), ("c", 10, "09:00"))
+    assert scheduler.find_next_available_slot(15) == "09:30"
+
+
+def test_next_slot_uses_a_gap_between_tasks_only_if_it_is_big_enough():
+    _, _, scheduler = _slot_owner(("a", 30, "08:00"), ("b", 20, "08:40"))
+    assert scheduler.find_next_available_slot(10) == "08:30"  # 10-minute gap fits
+    assert scheduler.find_next_available_slot(11) == "09:00"  # it doesn't
+
+
+def test_next_slot_honors_after_and_ignores_earlier_blocks():
+    _, _, scheduler = _slot_owner(("a", 60, "08:00"))
+    assert scheduler.find_next_available_slot(20, after="10:00") == "10:00"
+    assert scheduler.find_next_available_slot(20, after="08:30") == "09:00"
+
+
+def test_next_slot_ignores_completed_untimed_and_other_day_tasks():
+    owner, rex, scheduler = _slot_owner(("done", 60, "08:00"))
+    rex.tasks[0].mark_complete()
+    owner.addTask(rex, Task("untimed", 60, "low"))
+    owner.addTask(rex, Task("tomorrow", 60, "low", dueTime="08:00",
+                            dueDate=date.today() + timedelta(days=1)))
+
+    assert scheduler.find_next_available_slot(30) == "08:00"
+    assert scheduler.find_next_available_slot(30, day=date.today() + timedelta(days=1)) == "09:00"
+
+
+def test_next_slot_returns_none_when_it_would_run_past_midnight():
+    _, _, scheduler = _slot_owner()
+    assert scheduler.find_next_available_slot(45, after="23:30") is None
+    assert scheduler.find_next_available_slot(30, after="23:30") == "23:30"  # ends exactly at midnight
+
+
+def test_next_slot_rejects_bad_input():
+    _, _, scheduler = _slot_owner()
+    for bad in (0, -5, "abc"):
+        try:
+            scheduler.find_next_available_slot(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"duration {bad!r} should have been rejected")
+    try:
+        scheduler.find_next_available_slot(10, after="25:00")
+    except ValueError:
+        return
+    raise AssertionError("bad 'after' time should have been rejected")
+
+
+# --- saving and loading ---------------------------------------------------
+
+
+def _saved_owner():
+    owner = Owner("Sam", 90, "afternoon")
+    rex = Pet("Rex", "dog", "Labrador", 3)
+    kit = Pet("Kit", "cat", "Tabby", 2)
+    done = Task("Walk", 30, "high", dueTime="9:00", frequency="daily",
+                dueDate=date(2099, 1, 2))
+    owner.addTask(rex, done)
+    owner.addTask(rex, Task("Brush", 15, "low"))
+    owner.addTask(kit, Task("Feed", 5, "medium", dueTime="07:30"))
+    done.mark_complete()
+    return owner
+
+
+def test_save_and_load_round_trip_keeps_everything(tmp_path):
+    path = tmp_path / "data.json"
+    original = _saved_owner()
+
+    original.save_to_json(str(path))
+    loaded = Owner.load_from_json(str(path))
+
+    assert (loaded.name, loaded.availableMinutes, loaded.timePreferences) == ("Sam", 90, "afternoon")
+    assert [(p.name, p.species, p.breed, p.age) for p in loaded.pets] == [
+        ("Rex", "dog", "Labrador", 3), ("Kit", "cat", "Tabby", 2)]
+    walk = loaded.getTasksByPet("Rex")[0]
+    assert (walk.title, walk.duration, walk.priority, walk.completed) == ("Walk", 30, "high", True)
+    assert (walk.dueTime, walk.frequency, walk.dueDate) == ("09:00", "daily", date(2099, 1, 2))
+    assert _names(loaded.getAllTasks()) == _names(original.getAllTasks())
+    assert all(p.owner is loaded for p in loaded.pets)
+
+
+def test_loaded_owner_plans_the_same_as_the_original(tmp_path):
+    path = tmp_path / "data.json"
+    original = _saved_owner()
+    original.save_to_json(str(path))
+    loaded = Owner.load_from_json(str(path))
+
+    a, b = Scheduler(original), Scheduler(loaded)
+    a.generatePlan()
+    b.generatePlan()
+
+    assert [(t.title, t.startTime) for t in a.plan] == [(t.title, t.startTime) for t in b.plan]
+    assert _names(a.skipped) == _names(b.skipped)
+
+
+def test_loaded_data_keeps_working_after_load(tmp_path):
+    path = tmp_path / "data.json"
+    _saved_owner().save_to_json(str(path))
+    loaded = Owner.load_from_json(str(path))
+
+    loaded.addTask(loaded.pets[0], Task("New", 5, "low"))
+    loaded.save_to_json(str(path))
+
+    assert "New" in _names(Owner.load_from_json(str(path)).getAllTasks())
+
+
+def test_save_overwrites_and_leaves_no_temp_files(tmp_path):
+    path = tmp_path / "data.json"
+    owner = _saved_owner()
+    owner.save_to_json(str(path))
+    owner.save_to_json(str(path))
+
+    assert [f.name for f in tmp_path.iterdir()] == ["data.json"]
+
+
+def test_load_missing_file_raises_file_not_found(tmp_path):
+    try:
+        Owner.load_from_json(str(tmp_path / "nope.json"))
+    except FileNotFoundError:
+        return
+    raise AssertionError("expected FileNotFoundError")
+
+
+def test_save_to_missing_folder_raises_and_creates_nothing(tmp_path):
+    try:
+        _saved_owner().save_to_json(str(tmp_path / "no_such_folder" / "data.json"))
+    except FileNotFoundError:
+        assert list(tmp_path.iterdir()) == []
+        return
+    raise AssertionError("expected FileNotFoundError")
+
+
+def _load_text(tmp_path, text):
+    path = tmp_path / "data.json"
+    path.write_text(text, encoding="utf-8")
+    return Owner.load_from_json(str(path))
+
+
+def test_load_rejects_corrupt_and_malformed_files(tmp_path):
+    bad_files = [
+        "{ not json",
+        "",
+        "[]",
+        '{"name": "Sam"}',
+        '{"name": "Sam", "availableMinutes": 60, "timePreferences": "morning", "pets": "x"}',
+        '{"name": "Sam", "availableMinutes": 60, "timePreferences": "morning", "pets": [{"name": "Rex"}]}',
+    ]
+    for text in bad_files:
+        try:
+            _load_text(tmp_path, text)
+        except ValueError:
+            continue
+        raise AssertionError(f"{text!r} should have been rejected with ValueError")
+
+
+def test_load_rejects_hand_edited_invalid_values(tmp_path):
+    def file_with(task):
+        return ('{"name": "Sam", "availableMinutes": 60, "timePreferences": "morning", '
+                '"pets": [{"name": "Rex", "species": "dog", "breed": "x", "age": 1, '
+                f'"tasks": [{task}]}}]}}')
+
+    for task in (
+        '{"title": "a", "duration": -5, "priority": "low"}',
+        '{"title": "a", "duration": 10, "priority": "urgent"}',
+        '{"title": "a", "duration": 10, "priority": "low", "dueTime": "99:99"}',
+        '{"title": "a", "duration": 10, "priority": "low", "dueDate": "next week"}',
+        '{"title": "a", "duration": 10, "priority": "low", "frequency": "monthly"}',
+        '{"title": "a", "priority": "low"}',
+    ):
+        try:
+            _load_text(tmp_path, file_with(task))
+        except ValueError:
+            continue
+        raise AssertionError(f"{task} should have been rejected")

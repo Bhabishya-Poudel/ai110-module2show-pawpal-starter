@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 from pawpal_system import Owner, Pet, Task, Scheduler, minutesBeforeMidnight
 
 owner  = Owner("Sam", 60, "morning")
@@ -49,3 +52,19 @@ show("Completed only:", jordanScheduler.filter_tasks(completed=True))
 print("\nConflict check:")
 for warning in jordanScheduler.detect_conflicts() or ["No conflicts."]:
     print(f"  WARNING: {warning}")
+
+
+# --- Next free slot and saving/loading demo ---------------------------
+print("\nNext free slot (30 min), starting at the morning start:",
+      jordanScheduler.find_next_available_slot(30))
+print("Next free slot (30 min), searching from 09:00:",
+      jordanScheduler.find_next_available_slot(30, after="09:00"))
+
+# Round trip through a temporary file, so this demo never touches the app's data.json.
+with tempfile.TemporaryDirectory() as folder:
+    path = os.path.join(folder, "data.json")
+    jordan.save_to_json(path)
+    reloaded = Owner.load_from_json(path)
+print(f"\nSaved and reloaded {reloaded.name}: {len(reloaded.pets)} pets, "
+      f"{len(reloaded.getAllTasks())} tasks "
+      f"(original had {len(jordan.getAllTasks())}).")

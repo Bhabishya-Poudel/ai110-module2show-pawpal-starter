@@ -1,0 +1,74 @@
+classDiagram
+    %% Final design, matching pawpal_system.py.
+    %% Module-level helpers (not classes): minutesBeforeMidnight(), _toMinutes(), _toInt().
+    %% Task._toDate, Task.from_dict and Owner.load_from_json are static or class methods.
+    %% Module-level constants: PRIORITY_ORDER, TIME_PREFERENCES, RECURRENCE_DAYS, MINUTES_PER_DAY.
+
+    class Task {
+        +String title
+        +int duration
+        +String priority
+        +boolean completed
+        +String dueTime
+        +String frequency
+        +date dueDate
+        +String petName
+        +String startTime
+        +String reason
+        +mark_complete() void
+        +nextOccurrence() Task
+        +to_dict() dict
+        +from_dict(data)$ Task
+        -_toDate(value) date
+    }
+
+    class Pet {
+        +String name
+        +String species
+        +String breed
+        +int age
+        +list~Task~ tasks
+        +Owner owner
+        +addTask(task) void
+        +to_dict() dict
+    }
+
+    class Owner {
+        +String name
+        +int availableMinutes
+        +String timePreferences
+        +list~Pet~ pets
+        +addPet(pet) void
+        +addTask(pet, task) void
+        +getAllTasks() list~Task~
+        +getTasksByPet(petName) list~Task~
+        +getTasksByStatus(completed) list~Task~
+        +to_dict() dict
+        +save_to_json(path) void
+        +load_from_json(path)$ Owner
+        -_checkNewTask(task) void
+    }
+
+    class Scheduler {
+        +Owner owner
+        +list~Task~ plan
+        +list~Task~ skipped
+        +boolean generated
+        +generatePlan(today) list~Task~
+        +explainPlan() String
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(pet_name, completed) list~Task~
+        +mark_task_complete(task) Task
+        +detect_conflicts() list~String~
+        +find_next_available_slot(duration, day, after) String
+        +getPlanForPet(petName) list~Task~
+    }
+
+    Owner "1" --> "*" Pet : has
+    Pet "1" --> "*" Task : has
+    Pet "*" --> "0..1" Owner : owner back-reference
+    Scheduler --> Owner : uses
+    Scheduler "1" --> "*" Task : plans, sorts, filters
+    Scheduler ..> Pet : mark_task_complete adds the next task to the task's pet
+    Task ..> Task : nextOccurrence creates
+    Pet ..> Owner : addTask asks the owner to check the task

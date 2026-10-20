@@ -44,6 +44,16 @@ Yes. A few changes made the scheduler workable:
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+The scheduler looks at these things:
+
+- The owner's available minutes. A task that doesn't fit in the time left is skipped.
+- Task priority (low, medium, high). Higher priority is planned first.
+- The owner's preferred time of day, which sets when the plan starts (08:00, 13:00, or 18:00). Nothing is allowed to run past midnight.
+- Whether a task is already completed, and whether it is due later than today.
+- A task's due time, and which pet it belongs to. These only break ties between tasks with the same priority.
+
+Time and priority mattered most, because the owner's real problem is not having enough time, so the most important care has to come first. Due time and pet grouping are only tie-breakers on purpose. If a low-priority task could jump ahead of a high-priority one just because it had an earlier time, a plan could skip something important like medication.
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
@@ -85,7 +95,17 @@ I asked AI to break the code itself, think of edge cases, when it corrected the 
 - **Changed:** the AI's plan for tasks that would run past midnight was to skip them and give a clearer reason. I wanted it blocked and warned about when the value is entered, so `Owner` and `addTask` now reject those values with a message saying what to change. The scheduler's skip stays only as a fallback.
 - **Caught:** when I asked for a test of `mark_complete()`, the method didn't exist. The AI added it rather than writing a test for something that wasn't there.
 
-**How I verified it:** I didn't trust the explanations alone. I ran the edge-case script before and after each fix and compared the outputs, ran `main.py` and pasted its real output into the README, and ran the tests with pytest, which now pass (39 passed). Two limits remain. Validation only runs when objects are created or tasks are added, so later direct changes to fields like `owner.timePreferences` aren't re-checked. And the Streamlit interface in `app.py` has no automatic tests, so I only checked that it parses.
+**How I verified it:** I didn't trust the explanations alone. I ran the edge-case script before and after each fix and compared the outputs, ran `main.py` and pasted its real output into the README, and ran the tests with pytest, which now pass (54 passed). Two limits remain. Validation only runs when objects are created or tasks are added, so later direct changes to fields like `owner.timePreferences` aren't re-checked. And the Streamlit interface in `app.py` has no automatic tests, so I only checked that it parses.
+
+**c. AI strategy**
+
+*Which AI features were most effective?* Three things worked best. First, asking the assistant to try to break my code. When I had it probe edge cases against the new features, it found three real bugs I hadn't thought of: a `dueDate` typed as a string crashed the planner, an overdue daily task repeated into the past, and a date past the maximum raised a raw error. Second, having it make changes across several files at once (the scheduler, `app.py`, the tests, and the docs) so they stayed in step with each other. Third, having it run the code and the tests after each change instead of only describing what should happen.
+
+*One suggestion I rejected or changed.* The clearest one is in 3b above. For `explainPlan()` the AI wanted to add two more classes. I said no because it added more classes that reference each other for very little benefit, and I had the attributes changed to plain strings instead, which avoids the infinite self-reference loop. I used the same approach later: for conflict detection I kept the simple exact-time check instead of a full overlap check, and for due time I kept it as a tie-breaker instead of letting it override priority.
+
+*Separate chat sessions.* I worked in phases (design and UML, then the scheduling logic, then tests, then the UI and docs), and finishing one phase before starting the next kept each conversation about one job. When something broke in testing, I knew it was a test problem or a scheduler problem and not a design question. 
+
+*What I learned about being the lead architect.* The AI is fast at writing code, but it doesn't decide what the system should be. I had to decide the classes, what each one is responsible for, which behaviors mattered, and what "done" meant. The AI would happily keep adding things, so my job was to say no to extra complexity and to check its work by running it. The best results came when I gave it one clear task and then verified the result myself.
 
 ---
 
@@ -111,6 +131,10 @@ These matter because the owner trusts whatever plan the scheduler shows. A wrong
 - How confident are you that your scheduler works correctly?
 - What edge cases would you test next if you had more time?
 
+I'm fairly confident in the scheduler, about 4 out of 5. All 54 tests pass, and they cover normal use and unusual input like an owner with no pets, overdue and leap-day dates, and tasks at the same time. I'm not at 5 because the conflict check misses partial overlaps and the Streamlit app has no automatic tests.
+
+If I had more time I would test: overlapping durations (a 30-minute task at 09:00 and another at 09:15), changing a field like `owner.timePreferences` after the object was created, the Streamlit app itself, and a task that was added to a pet before the pet was added to an owner.
+
 ---
 
 ## 5. Reflection
@@ -119,10 +143,16 @@ These matter because the owner trusts whatever plan the scheduler shows. A wrong
 
 - What part of this project are you most satisfied with?
 
+I'm most satisfied with how the pieces fit together: the plan explains itself (every task has a reason), the validation catches bad input early, and the test suite covers both normal use and edge cases. Finding and fixing real bugs through the edge-case checks made me trust the code more.
+
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
 
+I would make the plan use the times the owner enters. Right now a task's time only affects ordering and conflict warnings, and the plan's start times come from the available minutes, which can look confusing in the app. I would also check for overlapping durations, let a `Task` know which pet it belongs to so that `mark_complete()` alone could create the next copy, and add automatic tests for the Streamlit app.
+
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+
+The AI can write code quickly, but I am the one responsible for the design. Keeping the classes simple, deciding what each one does, and checking the results by running them mattered more than how fast the code was written. Small, focused requests and testing every change worked much better than asking for everything at once.

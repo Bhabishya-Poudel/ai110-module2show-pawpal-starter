@@ -1,3 +1,6 @@
+import json
+import os
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -36,6 +39,11 @@ def _toMinutes(value: str, label: str) -> int:
     if not (0 <= hour < 24 and 0 <= minute < 60):
         raise ValueError(f"{label} must be a time between 00:00 and 23:59, got {value!r}")
     return hour * 60 + minute
+
+
+def _toHHMM(minutes: int) -> str:
+    """Format minutes since midnight as a zero-padded "HH:MM" string."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def _toInt(value, label: str) -> int:
@@ -108,6 +116,35 @@ class Task:
         """
         self.completed = True
 
+    def to_dict(self) -> dict:
+        """Return the fields worth saving as plain JSON types.
+
+        petName, startTime and reason are left out on purpose: the scheduler
+        fills them in again every time it builds a plan.
+        """
+        return {
+            "title": self.title,
+            "duration": self.duration,
+            "priority": self.priority,
+            "completed": self.completed,
+            "dueTime": self.dueTime,
+            "frequency": self.frequency,
+            "dueDate": self.dueDate.isoformat() if self.dueDate else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a Task from to_dict() output, going through the normal validation."""
+        return cls(
+            data["title"],
+            data["duration"],
+            data["priority"],
+            completed=bool(data.get("completed", False)),
+            dueTime=data.get("dueTime", ""),
+            frequency=data.get("frequency", ""),
+            dueDate=data.get("dueDate"),
+        )
+
     def nextOccurrence(self) -> "Task | None":
         """Return a fresh copy of this task for its next due date, or None if it doesn't repeat.
 
@@ -143,6 +180,16 @@ class Pet:
     # Set by Owner.addPet so the pet can apply the owner's rules. Left out of
     # repr/compare to avoid an Owner <-> Pet loop.
     owner: "Owner | None" = field(default=None, repr=False, compare=False)
+
+    def to_dict(self) -> dict:
+        """Return this pet and its tasks as plain JSON types."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "breed": self.breed,
+            "age": self.age,
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
 
     def addTask(self, task: Task) -> None:
         """Add a task to this pet, applying the owner's rules if it has one."""
@@ -239,6 +286,60 @@ class Owner:
     def getTasksByStatus(self, completed: bool) -> list[Task]:
         """Return all tasks that are completed (True) or still pending (False)."""
         return [t for t in self.getAllTasks() if t.completed == completed]
+
+    def to_dict(self) -> dict:
+        """Return the owner, their pets and every task as plain JSON types."""
+        return {
+            "name": self.name,
+            "availableMinutes": self.availableMinutes,
+            "timePreferences": self.timePreferences,
+            "pets": [p.to_dict() for p in self.pets],
+        }
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Save this owner, their pets and tasks to a JSON file.
+
+        The file is written to a temporary file first and then moved into
+        place, so a crash mid-save can't leave a half-written data file.
+        """
+        folder = os.path.dirname(os.path.abspath(path))
+        fd, tmpPath = tempfile.mkstemp(dir=folder, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2)
+            os.replace(tmpPath, path)
+        except BaseException:
+            if os.path.exists(tmpPath):
+                os.remove(tmpPath)
+            raise
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> "Owner":
+        """Load an owner saved by save_to_json().
+
+        Raises FileNotFoundError if the file doesn't exist and ValueError if
+        it isn't valid JSON or has missing or invalid values. Every value goes
+        through the same validation as when it is typed in, so a hand-edited
+        file can't sneak in a bad task.
+        """
+        with open(path, encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:  # a ValueError subclass, with a clearer message
+                raise ValueError(f"{path} is not valid JSON: {e}") from None
+        try:
+            owner = cls(data["name"], data["availableMinutes"], data["timePreferences"])
+            for petData in data["pets"]:
+                pet = Pet(
+                    petData["name"], petData["species"], petData["breed"],
+                    _toInt(petData["age"], "age"),
+                )
+                owner.addPet(pet)
+                for taskData in petData["tasks"]:
+                    pet.addTask(Task.from_dict(taskData))
+        except (KeyError, TypeError, AttributeError) as e:
+            raise ValueError(f"{path} has missing or malformed data ({type(e).__name__}: {e})") from None
+        return owner
 
 
 @dataclass
@@ -349,6 +450,36 @@ class Scheduler:
         if nextTask is not None:
             pet.addTask(nextTask)
         return nextTask
+
+    def find_next_available_slot(
+        self, duration: int, day: date | None = None, after: str | None = None
+    ) -> str | None:
+        """Return the earliest "HH:MM" where a task of `duration` minutes fits without
+        overlapping any timed, pending task on `day` (default: today).
+
+        The search starts at `after` if given, otherwise at the owner's preferred
+        start time, and the task must finish before midnight. Returns None if
+        there is no gap. Tasks without a dueTime are not counted as busy.
+        """
+        duration = _toInt(duration, "duration")
+        if duration <= 0:
+            raise ValueError(f"duration must be positive, got {duration}")
+        day = day or date.today()
+        startText = after if after else TIME_PREFERENCES[self.owner.timePreferences]
+        cursor = _toMinutes(startText, "after")
+
+        busy = sorted(
+            (_toMinutes(t.dueTime, "dueTime"), _toMinutes(t.dueTime, "dueTime") + t.duration)
+            for t in self.owner.getAllTasks()
+            if t.dueTime and not t.completed and (t.dueDate or date.today()) == day
+        )
+        # Sweep through the busy blocks in time order. If the gap before a block
+        # is big enough, take it. Otherwise move the cursor to the block's end.
+        for blockStart, blockEnd in busy:
+            if blockStart >= cursor + duration:
+                break
+            cursor = max(cursor, blockEnd)
+        return _toHHMM(cursor) if cursor + duration <= MINUTES_PER_DAY else None
 
     def detect_conflicts(self) -> list[str]:
         """Return a warning for each date and time that has more than one pending task.
